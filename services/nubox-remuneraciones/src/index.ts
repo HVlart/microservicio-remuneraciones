@@ -112,7 +112,20 @@ async function procesarRegistros(
 const app = express();
 app.use(express.json());
 
-app.post('/extraer', async (req: Request, res: Response) => {
+const autenticar = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void => {
+  const apiKey = req.headers['x-api-key'];
+  if (apiKey !== process.env.API_SECRET_KEY) {
+    res.status(401).json({ error: 'No autorizado' });
+    return;
+  }
+  next();
+};
+
+app.post('/extraer', autenticar, async (req: Request, res: Response) => {
   const registros = req.body?.registros as RegistroExtraccion[] | undefined;
 
   if (!Array.isArray(registros)) {
