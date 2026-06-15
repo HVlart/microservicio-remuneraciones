@@ -14,9 +14,11 @@ export async function descargarLibroRemuneraciones(
   const { codigoCliente, anio, mes, rut, password } = params;
 
   const browser = await chromium.launch({
-    headless: true,
-    executablePath: '/usr/bin/chromium',
+    headless: false,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    ...(process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD === '1' && {
+      executablePath: '/usr/bin/chromium',
+    }),
   });
 
   const context = await browser.newContext({ acceptDownloads: true });

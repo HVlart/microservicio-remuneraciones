@@ -26,10 +26,7 @@ export async function actualizarEstadoExtraccion(
   estado: string,
   mensajeError?: string
 ): Promise<void> {
-  const datos: Record<string, unknown> = {
-    estado,
-    actualizado_at: new Date().toISOString(),
-  };
+  const datos: Record<string, unknown> = { estado };
 
   if (mensajeError !== undefined) {
     datos.mensaje_error = mensajeError;

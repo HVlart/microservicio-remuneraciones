@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import cron from 'node-cron';
 import { descargarLibroRemuneraciones } from './nubox';
