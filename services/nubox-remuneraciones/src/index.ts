@@ -21,7 +21,7 @@ interface ResumenExtraccion {
   errores: number;
 }
 
-const NUBOX_EMAIL = process.env.NUBOX_EMAIL;
+const NUBOX_RUT = process.env.NUBOX_RUT;
 const NUBOX_PASSWORD = process.env.NUBOX_PASSWORD;
 
 function esperar(ms: number): Promise<void> {
@@ -48,9 +48,9 @@ async function marcarExitoso(id: string, nombreArchivo: string): Promise<void> {
 async function procesarRegistros(
   registros: RegistroExtraccion[]
 ): Promise<ResumenExtraccion> {
-  if (!NUBOX_EMAIL || !NUBOX_PASSWORD) {
+  if (!NUBOX_RUT || !NUBOX_PASSWORD) {
     throw new Error(
-      'Faltan variables de entorno NUBOX_EMAIL y/o NUBOX_PASSWORD'
+      'Faltan variables de entorno NUBOX_RUT y/o NUBOX_PASSWORD'
     );
   }
 
@@ -68,7 +68,7 @@ async function procesarRegistros(
         codigoCliente: registro.codigo_cliente,
         anio: registro.periodo_anio,
         mes: registro.periodo_mes,
-        email: NUBOX_EMAIL,
+        rut: NUBOX_RUT,
         password: NUBOX_PASSWORD,
       });
 

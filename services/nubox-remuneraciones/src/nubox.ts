@@ -4,14 +4,14 @@ export interface ParamsDescarga {
   codigoCliente: string;
   anio: number;
   mes: number;
-  email: string;
+  rut: string;
   password: string;
 }
 
 export async function descargarLibroRemuneraciones(
   params: ParamsDescarga
 ): Promise<Buffer> {
-  const { codigoCliente, anio, mes, email, password } = params;
+  const { codigoCliente, anio, mes, rut, password } = params;
 
   const browser = await chromium.launch({
     headless: true,
@@ -24,8 +24,7 @@ export async function descargarLibroRemuneraciones(
 
     // 1. Login en Nubox
     await page.goto('https://app.nubox.cl/login');
-    // TODO: verificar selector en DOM de Nubox
-    await page.fill('[name="email"]', email);
+    await page.fill('[name="rut"]', rut); // TODO: verificar selector en DOM de Nubox
     // TODO: verificar selector en DOM de Nubox
     await page.fill('[name="password"]', password);
     // TODO: verificar selector en DOM de Nubox
