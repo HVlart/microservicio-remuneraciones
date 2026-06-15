@@ -1,4 +1,4 @@
-import { chromium } from '@playwright/test';
+import { chromium } from 'playwright';
 
 export interface ParamsDescarga {
   codigoCliente: string;
@@ -18,65 +18,71 @@ export async function descargarLibroRemuneraciones(
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
+  const context = await browser.newContext({ acceptDownloads: true });
+  const page = await context.newPage();
+
   try {
-    const context = await browser.newContext({ acceptDownloads: true });
-    const page = await context.newPage();
+    // 1. Login
+    await page.goto('https://web.nubox.com/Login');
+    await page.getByRole('textbox', { name: 'Ingresa tu rut' }).fill(rut);
+    await page
+      .getByRole('textbox', { name: 'Ingresa tu contraseña' })
+      .fill(password);
+    await page.getByRole('button', { name: 'Ingresar' }).click();
 
-    // 1. Login en Nubox
-    await page.goto('https://app.nubox.cl/login');
-    await page.fill('[name="rut"]', rut); // TODO: verificar selector en DOM de Nubox
-    // TODO: verificar selector en DOM de Nubox
-    await page.fill('[name="password"]', password);
-    // TODO: verificar selector en DOM de Nubox
-    await page.click('[type="submit"]');
-    await page.waitForNavigation();
-
-    // 2. Navegar al módulo de remuneraciones
-    // Ir a Reportes → Gestión (ajustar selectores según DOM real de Nubox)
-    // TODO: verificar selector en DOM de Nubox
-    await page.goto('https://app.nubox.cl/remuneraciones/reportes/gestion');
-
-    // 3. Seleccionar empresa por código C-XXX en el dropdown
-    // El dropdown muestra "C-001 - NOMBRE EMPRESA"
-    // TODO: verificar selector en DOM de Nubox
-    const dropdown = page.locator('select, [role="combobox"]').first();
-    // Playwright no acepta RegExp en selectOption, por lo que resolvemos el
-    // value de la opción cuyo texto comienza con el código del cliente.
-    const valorOpcion = await dropdown
-      .locator('option')
-      .evaluateAll((opciones, codigo) => {
-        const objetivo = (opciones as HTMLOptionElement[]).find((o) =>
-          (o.textContent ?? '').trim().startsWith(codigo)
-        );
-        return objetivo ? objetivo.value : null;
-      }, codigoCliente);
-
-    if (valorOpcion === null) {
-      throw new Error(
-        `No se encontró la empresa con código '${codigoCliente}' en el dropdown`
-      );
+    // 2. Manejar modal "Acceder de todas formas" si aparece
+    try {
+      await page
+        .getByRole('button', { name: 'Acceder de todas formas' })
+        .waitFor({ timeout: 5000 });
+      await page
+        .getByRole('button', { name: 'Acceder de todas formas' })
+        .click();
+    } catch {
+      // El modal no apareció, continuar normalmente
     }
 
-    await dropdown.selectOption(valorOpcion);
+    // 3. Navegar a Remuneraciones → Reportes → Gestión → Costo Empresa
+    await page.getByText('Remuneraciones 2').click();
+    await page.getByRole('button', { name: 'Reportes' }).click();
+    await page.getByRole('button', { name: 'Gestión' }).click();
+    await page.getByRole('button', { name: 'Costo Empresa' }).click();
 
-    // 4. Seleccionar período
-    // El campo de período acepta formato MM/YYYY
-    const mesFormateado = String(mes).padStart(2, '0');
-    // TODO: verificar selector en DOM de Nubox
-    await page.fill(
-      '[name="periodo"], input[type="month"], .periodo-input',
-      `${mesFormateado}/${anio}`
-    );
+    // 4. Seleccionar empresa por código C-XXX
+    await page.locator('.ui-absolute.ui-right-1').click();
+    await page
+      .getByRole('option', { name: new RegExp(`^${codigoCliente}`) })
+      .click();
 
-    // 5. Interceptar descarga
+    // 5. Seleccionar período (mes y año)
+    await page.getByRole('textbox', { name: 'Periodo del Reporte' }).click();
+
+    // Navegar al año correcto si es necesario
+    // El datepicker de Nubox muestra el mes actual por defecto
+    // Hacer clic en el mes correcto
+    const MESES = [
+      'enero',
+      'febrero',
+      'marzo',
+      'abril',
+      'mayo',
+      'junio',
+      'julio',
+      'agosto',
+      'septiembre',
+      'octubre',
+      'noviembre',
+      'diciembre',
+    ];
+    const nombreMes = MESES[mes - 1];
+    await page.getByRole('button', { name: nombreMes }).click();
+
+    // 6. Interceptar descarga y generar reporte
     const downloadPromise = page.waitForEvent('download');
-    // TODO: verificar selector en DOM de Nubox
-    await page.click(
-      'button:has-text("Generar reporte"), input[value="Generar reporte"]'
-    );
+    await page.getByRole('button', { name: 'Generar reporte' }).click();
     const download = await downloadPromise;
 
-    // 6. Obtener buffer del archivo descargado
+    // 7. Convertir descarga a Buffer
     const stream = await download.createReadStream();
     const chunks: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
