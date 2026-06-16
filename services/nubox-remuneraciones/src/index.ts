@@ -30,19 +30,40 @@ function esperar(ms: number): Promise<void> {
 }
 
 async function marcarExitoso(id: string, nombreArchivo: string): Promise<void> {
-  const { error } = await supabase
+  console.log(
+    `[index] Marcando exitoso id=${id} con nombre_archivo='${nombreArchivo}'`
+  );
+
+  // .select() es CLAVE: sin esto, un UPDATE que no encuentra la fila devuelve
+  // error=null y data=[], dejando el registro en 'en_proceso' silenciosamente.
+  const { data, error } = await supabase
     .from('extracciones_log')
     .update({
       estado: 'exitoso',
       nombre_archivo: nombreArchivo,
     })
-    .eq('id', id);
+    .eq('id', id)
+    .select('id');
 
   if (error) {
+    console.error(`[index] ERROR al marcar exitoso (id=${id}):`, error);
     throw new Error(
       `Error al marcar exitoso extracciones_log (id=${id}): ${error.message}`
     );
   }
+
+  if (!data || data.length === 0) {
+    console.error(
+      `[index] ADVERTENCIA: marcarExitoso no afectó ninguna fila (id=${id}). El registro pudo no existir o el id no coincide.`
+    );
+    throw new Error(
+      `marcarExitoso no afectó ninguna fila en extracciones_log (id=${id})`
+    );
+  }
+
+  console.log(
+    `[index] OK: id=${id} marcado como 'exitoso' (${data.length} fila/s)`
+  );
 }
 
 async function procesarRegistros(
@@ -60,10 +81,18 @@ async function procesarRegistros(
     errores: 0,
   };
 
+  console.log(`[index] Iniciando procesamiento de ${registros.length} registro/s`);
+
   for (const registro of registros) {
     resumen.procesados += 1;
+    const etiqueta = `id=${registro.id} (${registro.codigo_cliente} ${registro.periodo_anio}-${registro.periodo_mes})`;
+
+    console.log(
+      `[index] [${resumen.procesados}/${registros.length}] Procesando ${etiqueta}`
+    );
 
     try {
+      console.log(`[index] Paso 1/3: descargando libro de Nubox para ${etiqueta}`);
       const buffer = await descargarLibroRemuneraciones({
         codigoCliente: registro.codigo_cliente,
         anio: registro.periodo_anio,
@@ -71,41 +100,48 @@ async function procesarRegistros(
         rut: NUBOX_RUT,
         password: NUBOX_PASSWORD,
       });
+      console.log(
+        `[index] Descarga OK para ${etiqueta} (${buffer.length} bytes)`
+      );
 
       const mesFormateado = String(registro.periodo_mes).padStart(2, '0');
       const nombreArchivo = `${registro.codigo_cliente}_Libro_Remuneraciones_${registro.periodo_anio}_${mesFormateado}.xlsx`;
 
-      await subirArchivoDrive(
+      console.log(`[index] Paso 2/3: subiendo a Drive '${nombreArchivo}'`);
+      const fileId = await subirArchivoDrive(
         nombreArchivo,
         buffer,
         registro.codigo_cliente,
         registro.periodo_anio,
         registro.periodo_mes
       );
+      console.log(`[index] Subida a Drive OK para ${etiqueta} (fileId=${fileId})`);
 
+      console.log(`[index] Paso 3/3: actualizando estado en Supabase ${etiqueta}`);
       await marcarExitoso(registro.id, nombreArchivo);
       resumen.exitosos += 1;
+      console.log(`[index] Registro ${etiqueta} completado con éxito`);
     } catch (err) {
       resumen.errores += 1;
       const mensaje = err instanceof Error ? err.message : String(err);
+      console.error(`[index] Error procesando ${etiqueta}:`, err);
       try {
-        await actualizarEstadoExtraccion(registro.id, 'error', mensaje);
+        await actualizarEstadoExtraccion(registro.id, 'error', {
+          mensajeError: mensaje,
+        });
       } catch (errActualizar) {
         console.error(
-          `No se pudo registrar el error para id=${registro.id}:`,
+          `[index] No se pudo registrar el estado 'error' para ${etiqueta}:`,
           errActualizar
         );
       }
-      console.error(
-        `Error procesando registro id=${registro.id} (${registro.codigo_cliente}):`,
-        mensaje
-      );
     }
 
     // Esperar 3 segundos entre cada registro para no saturar Nubox
     await esperar(3000);
   }
 
+  console.log('[index] Procesamiento finalizado:', resumen);
   return resumen;
 }
 
@@ -221,6 +257,14 @@ async function ejecutarExtraccionAutomatica(): Promise<void> {
   const resumen = await procesarRegistros(insertados as RegistroExtraccion[]);
   console.log('[cron] Extracción automática finalizada:', resumen);
 }
+
+// Capturar fallos silenciosos para que SIEMPRE queden en los logs de Railway.
+process.on('unhandledRejection', (reason) => {
+  console.error('[index] unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[index] uncaughtException:', err);
+});
 
 app.listen(PORT, () => {
   console.log(`nubox-remuneraciones escuchando en el puerto ${PORT}`);
