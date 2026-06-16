@@ -35,7 +35,6 @@ async function marcarExitoso(id: string, nombreArchivo: string): Promise<void> {
     .update({
       estado: 'exitoso',
       nombre_archivo: nombreArchivo,
-      actualizado_at: new Date().toISOString(),
     })
     .eq('id', id);
 
