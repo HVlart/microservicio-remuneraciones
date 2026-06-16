@@ -85,7 +85,7 @@ export async function descargarLibroRemuneraciones(
     await page.getByRole('button', { name: 'Generar reporte' }).click();
     const download = await downloadPromise;
 
-    // 7. Convertir descarga a Buffer
+    // 7. Convertir descarga a Buffer commit
     const stream = await download.createReadStream();
     const chunks: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
