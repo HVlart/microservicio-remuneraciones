@@ -58,27 +58,14 @@ export async function descargarLibroRemuneraciones(
       .click();
 
     // 5. Seleccionar período (mes y año)
-    await page.getByRole('textbox', { name: 'Periodo del Reporte' }).click();
+    await page.getByRole('button', { name: 'Abrir selector de mes' }).click();
+    await page.getByLabel('Seleccionar año').selectOption(String(anio));
 
-    // Navegar al año correcto si es necesario
-    // El datepicker de Nubox muestra el mes actual por defecto
-    // Hacer clic en el mes correcto
-    const MESES = [
-      'enero',
-      'febrero',
-      'marzo',
-      'abril',
-      'mayo',
-      'junio',
-      'julio',
-      'agosto',
-      'septiembre',
-      'octubre',
-      'noviembre',
-      'diciembre',
+    const MESES_CORTOS = [
+      'ene', 'feb', 'mar', 'abr', 'may', 'jun',
+      'jul', 'ago', 'sept', 'oct', 'nov', 'dic',
     ];
-    const nombreMes = MESES[mes - 1];
-    await page.getByRole('button', { name: nombreMes }).click();
+    await page.getByRole('button', { name: MESES_CORTOS[mes - 1] }).click();
 
     // 6. Interceptar descarga y generar reporte
     const downloadPromise = page.waitForEvent('download');
