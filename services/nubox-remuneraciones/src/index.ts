@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import cron from 'node-cron';
-import { crearSesionNubox, descargarLibroRemuneraciones } from './nubox';
+import { crearSesionNubox, navegarAFormulario, cambiarMes, descargarArchivo } from './nubox';
 import { subirArchivoDrive } from './drive';
 import { supabase, actualizarEstadoExtraccion } from './supabase';
 
@@ -87,6 +87,8 @@ async function procesarRegistros(
   const { browser, page } = await crearSesionNubox(NUBOX_RUT, NUBOX_PASSWORD);
 
   try {
+    let primerRegistro = true;
+
     for (const registro of registros) {
       resumen.procesados += 1;
       const etiqueta = `id=${registro.id} (${registro.codigo_cliente} ${registro.periodo_anio}-${registro.periodo_mes})`;
@@ -96,52 +98,57 @@ async function procesarRegistros(
       );
 
       try {
-        console.log(`[index] Paso 1/3: descargando libro de Nubox para ${etiqueta}`);
-        const buffer = await descargarLibroRemuneraciones(
-          page,
-          registro.codigo_cliente,
-          registro.periodo_anio,
-          registro.periodo_mes
-        );
-        console.log(
-          `[index] Descarga OK para ${etiqueta} (${buffer.length} bytes)`
-        );
+        console.log(`[index] Paso 1/3: descargando libro de Nubox`);
+
+        if (primerRegistro) {
+          await navegarAFormulario(
+            page,
+            registro.codigo_cliente,
+            registro.periodo_anio,
+            registro.periodo_mes
+          );
+          primerRegistro = false;
+        } else {
+          await cambiarMes(page, registro.periodo_anio, registro.periodo_mes);
+        }
+
+        const buffer = await descargarArchivo(page);
+        console.log(`[index] Descarga OK (${buffer.length} bytes)`);
 
         const mesFormateado = String(registro.periodo_mes).padStart(2, '0');
         const nombreArchivo = `${registro.codigo_cliente}_Libro_Remuneraciones_${registro.periodo_anio}_${mesFormateado}.xlsx`;
 
         console.log(`[index] Paso 2/3: subiendo a Drive '${nombreArchivo}'`);
-        const fileId = await subirArchivoDrive(
+        await subirArchivoDrive(
           nombreArchivo,
           buffer,
           registro.codigo_cliente,
           registro.periodo_anio,
           registro.periodo_mes
         );
-        console.log(`[index] Subida a Drive OK para ${etiqueta} (fileId=${fileId})`);
+        console.log(`[index] Subida a Drive OK`);
 
-        console.log(`[index] Paso 3/3: actualizando estado en Supabase ${etiqueta}`);
+        console.log(`[index] Paso 3/3: actualizando estado en Supabase`);
         await marcarExitoso(registro.id, nombreArchivo);
         resumen.exitosos += 1;
-        console.log(`[index] Registro ${etiqueta} completado con éxito`);
+        console.log(`[index] Registro completado con éxito`);
       } catch (err) {
         resumen.errores += 1;
         const mensaje = err instanceof Error ? err.message : String(err);
-        console.error(`[index] Error procesando ${etiqueta}:`, err);
+        console.error(`[index] Error procesando id=${registro.id}: ${mensaje}`);
         try {
           await actualizarEstadoExtraccion(registro.id, 'error', {
             mensajeError: mensaje,
           });
         } catch (errActualizar) {
           console.error(
-            `[index] No se pudo registrar el estado 'error' para ${etiqueta}:`,
+            `[index] No se pudo actualizar estado a error:`,
             errActualizar
           );
         }
       }
 
-      // Esperar 3 segundos entre cada registro para no saturar Nubox
-      await esperar(3000);
+      await esperar(2000);
     }
   } finally {
     await browser.close();

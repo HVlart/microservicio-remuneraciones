@@ -1,5 +1,10 @@
 import { chromium, Browser, Page } from 'playwright';
 
+const MESES_NOMBRES = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+
 export async function crearSesionNubox(
   rut: string,
   password: string
@@ -36,13 +41,13 @@ export async function crearSesionNubox(
   return { browser, page };
 }
 
-export async function descargarLibroRemuneraciones(
+export async function navegarAFormulario(
   page: Page,
   codigoCliente: string,
   anio: number,
   mes: number
-): Promise<Buffer> {
-  // Navegar al módulo de remuneraciones
+): Promise<void> {
+  // Navegar al módulo
   await page.getByText('Remuneraciones 2').click();
   await page.getByRole('button', { name: 'Reportes' }).click();
   await page.getByRole('button', { name: 'Gestión' }).click();
@@ -54,33 +59,32 @@ export async function descargarLibroRemuneraciones(
     .getByRole('option', { name: new RegExp(`^${codigoCliente}`) })
     .click();
 
-  // Seleccionar período
+  // Seleccionar año y mes
   await page.getByRole('button', { name: 'Abrir selector de mes' }).click();
   await page.getByLabel('Seleccionar año').selectOption(String(anio));
-  const MESES_NOMBRES = [
-    'enero',
-    'febrero',
-    'marzo',
-    'abril',
-    'mayo',
-    'junio',
-    'julio',
-    'agosto',
-    'septiembre',
-    'octubre',
-    'noviembre',
-    'diciembre',
-  ];
   await page
     .getByRole('button', { name: `${MESES_NOMBRES[mes - 1]} ${anio}` })
     .click();
+}
 
-  // Interceptar descarga
+export async function cambiarMes(
+  page: Page,
+  anio: number,
+  mes: number
+): Promise<void> {
+  await page.getByRole('button', { name: 'Abrir selector de mes' }).click();
+  // Cambiar año (Nubox siempre lo muestra; seleccionar el correcto aunque ya esté)
+  await page.getByLabel('Seleccionar año').selectOption(String(anio));
+  await page
+    .getByRole('button', { name: `${MESES_NOMBRES[mes - 1]} ${anio}` })
+    .click();
+}
+
+export async function descargarArchivo(page: Page): Promise<Buffer> {
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Generar reporte' }).click();
   const download = await downloadPromise;
 
-  // Convertir a Buffer
   const stream = await download.createReadStream();
   const chunks: Buffer[] = [];
   await new Promise<void>((resolve, reject) => {
