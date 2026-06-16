@@ -1,18 +1,9 @@
-import { chromium } from 'playwright';
+import { chromium, Browser, Page } from 'playwright';
 
-export interface ParamsDescarga {
-  codigoCliente: string;
-  anio: number;
-  mes: number;
-  rut: string;
-  password: string;
-}
-
-export async function descargarLibroRemuneraciones(
-  params: ParamsDescarga
-): Promise<Buffer> {
-  const { codigoCliente, anio, mes, rut, password } = params;
-
+export async function crearSesionNubox(
+  rut: string,
+  password: string
+): Promise<{ browser: Browser; page: Page }> {
   const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -20,69 +11,83 @@ export async function descargarLibroRemuneraciones(
       executablePath: '/usr/bin/chromium',
     }),
   });
-
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
 
+  await page.goto('https://web.nubox.com/Login');
+  await page.getByRole('textbox', { name: 'Ingresa tu rut' }).fill(rut);
+  await page
+    .getByRole('textbox', { name: 'Ingresa tu contraseña' })
+    .fill(password);
+  await page.getByRole('button', { name: 'Ingresar' }).click();
+
   try {
-    // 1. Login
-    await page.goto('https://web.nubox.com/Login');
-    await page.getByRole('textbox', { name: 'Ingresa tu rut' }).fill(rut);
     await page
-      .getByRole('textbox', { name: 'Ingresa tu contraseña' })
-      .fill(password);
-    await page.getByRole('button', { name: 'Ingresar' }).click();
-
-    // 2. Manejar modal "Acceder de todas formas" si aparece
-    try {
-      await page
-        .getByRole('button', { name: 'Acceder de todas formas' })
-        .waitFor({ timeout: 5000 });
-      await page
-        .getByRole('button', { name: 'Acceder de todas formas' })
-        .click();
-    } catch {
-      // El modal no apareció, continuar normalmente
-    }
-
-    // 3. Navegar a Remuneraciones → Reportes → Gestión → Costo Empresa
-    await page.getByText('Remuneraciones 2').click();
-    await page.getByRole('button', { name: 'Reportes' }).click();
-    await page.getByRole('button', { name: 'Gestión' }).click();
-    await page.getByRole('button', { name: 'Costo Empresa' }).click();
-
-    // 4. Seleccionar empresa por código C-XXX
-    await page.locator('.ui-absolute.ui-right-1').click();
-    await page
-      .getByRole('option', { name: new RegExp(`^${codigoCliente}`) })
-      .click();
-
-    // 5. Seleccionar período (mes y año)
-    await page.getByRole('button', { name: 'Abrir selector de mes' }).click();
-    await page.getByLabel('Seleccionar año').selectOption(String(anio));
-
-    const MESES_CORTOS = [
-      'ene', 'feb', 'mar', 'abr', 'may', 'jun',
-      'jul', 'ago', 'sept', 'oct', 'nov', 'dic',
-    ];
-    await page.getByRole('button', { name: MESES_CORTOS[mes - 1] }).click();
-
-    // 6. Interceptar descarga y generar reporte
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Generar reporte' }).click();
-    const download = await downloadPromise;
-
-    // 7. Convertir descarga a Buffer commit
-    const stream = await download.createReadStream();
-    const chunks: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      stream.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
-      stream.on('end', () => resolve());
-      stream.on('error', reject);
-    });
-
-    return Buffer.concat(chunks);
-  } finally {
-    await browser.close();
+      .getByRole('button', { name: 'Acceder de todas formas' })
+      .waitFor({ timeout: 5000 });
+    await page.getByRole('button', { name: 'Acceder de todas formas' }).click();
+  } catch {
+    // Modal no apareció
   }
+
+  // Esperar que cargue el dashboard
+  await page.getByText('Remuneraciones 2').waitFor({ timeout: 15000 });
+
+  return { browser, page };
+}
+
+export async function descargarLibroRemuneraciones(
+  page: Page,
+  codigoCliente: string,
+  anio: number,
+  mes: number
+): Promise<Buffer> {
+  // Navegar al módulo de remuneraciones
+  await page.getByText('Remuneraciones 2').click();
+  await page.getByRole('button', { name: 'Reportes' }).click();
+  await page.getByRole('button', { name: 'Gestión' }).click();
+  await page.getByRole('button', { name: 'Costo Empresa' }).click();
+
+  // Seleccionar empresa
+  await page.locator('.ui-absolute.ui-right-1').click();
+  await page
+    .getByRole('option', { name: new RegExp(`^${codigoCliente}`) })
+    .click();
+
+  // Seleccionar período
+  await page.getByRole('button', { name: 'Abrir selector de mes' }).click();
+  await page.getByLabel('Seleccionar año').selectOption(String(anio));
+  const MESES_NOMBRES = [
+    'enero',
+    'febrero',
+    'marzo',
+    'abril',
+    'mayo',
+    'junio',
+    'julio',
+    'agosto',
+    'septiembre',
+    'octubre',
+    'noviembre',
+    'diciembre',
+  ];
+  await page
+    .getByRole('button', { name: `${MESES_NOMBRES[mes - 1]} ${anio}` })
+    .click();
+
+  // Interceptar descarga
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Generar reporte' }).click();
+  const download = await downloadPromise;
+
+  // Convertir a Buffer
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    stream.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+    stream.on('end', () => resolve());
+    stream.on('error', reject);
+  });
+
+  return Buffer.concat(chunks);
 }
