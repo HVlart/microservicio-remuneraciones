@@ -90,21 +90,23 @@ export async function subirArchivoDrive(
     carpetaClienteId
   );
 
-  const nombreEscapado = escaparNombre(nombreArchivo);
-  const existentes = await drive.files.list({
-    q: `name = '${nombreEscapado}' and '${carpetaAnioId}' in parents and trashed = false`,
-    fields: 'files(id, name)',
-    spaces: 'drive',
+  const busqueda = await drive.files.list({
+    q: `name='${escaparNombre(nombreArchivo)}' and '${carpetaAnioId}' in parents and trashed=false`,
+    fields: 'files(id)',
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
   });
 
-  for (const archivo of existentes.data.files ?? []) {
-    if (archivo.id) {
+  const archivosExistentes = busqueda.data.files ?? [];
+
+  for (const archivo of archivosExistentes) {
+    try {
       await drive.files.delete({
-        fileId: archivo.id,
+        fileId: archivo.id!,
         supportsAllDrives: true,
       });
+    } catch {
+      // Si el archivo ya no existe, continuar
     }
   }
 
