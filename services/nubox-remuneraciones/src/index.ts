@@ -175,22 +175,21 @@ const autenticar = (
   next();
 };
 
-app.post('/extraer', autenticar, async (req: Request, res: Response) => {
+app.post('/extraer', autenticar, (req: Request, res: Response) => {
   const registros = req.body?.registros as RegistroExtraccion[] | undefined;
 
-  if (!Array.isArray(registros)) {
-    return res
-      .status(400)
-      .json({ error: 'El cuerpo debe incluir un arreglo "registros"' });
+  if (!Array.isArray(registros) || registros.length === 0) {
+    res.status(400).json({ error: 'El cuerpo debe incluir un arreglo "registros" no vacío' });
+    return;
   }
 
-  try {
-    const resumen = await procesarRegistros(registros);
-    return res.json(resumen);
-  } catch (err) {
-    const mensaje = err instanceof Error ? err.message : String(err);
-    return res.status(500).json({ error: mensaje });
-  }
+  // Responder inmediatamente sin esperar el procesamiento
+  res.json({ ok: true, total: registros.length, mensaje: 'Extracción iniciada en background' });
+
+  // Procesar en background sin await
+  procesarRegistros(registros).catch(err => {
+    console.error('[extraer] Error no capturado en procesarRegistros:', err);
+  });
 });
 
 app.get('/health', (_req: Request, res: Response) => {
