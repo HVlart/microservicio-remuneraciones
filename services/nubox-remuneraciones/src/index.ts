@@ -214,10 +214,9 @@ cron.schedule(
 async function ejecutarExtraccionAutomatica(): Promise<void> {
   // 1. Consultar contribuyentes con 'remuneraciones' en servicios.
   // Se asume que la columna "servicios" es un arreglo (text[]/jsonb).
-  // TODO: ajustar nombre de columna/tabla según el esquema real.
   const { data: contribuyentes, error } = await supabase
     .from('contribuyentes')
-    .select('id, codigo_cliente, nombre, servicios')
+    .select('id, numero_cliente, razon_social, servicios')
     .contains('servicios', ['remuneraciones']);
 
   if (error) {
@@ -241,12 +240,12 @@ async function ejecutarExtraccionAutomatica(): Promise<void> {
   // 3. Insertar registros en extracciones_log con estado 'en_proceso' y tipo 'automatica'
   const filas = contribuyentes.map((c: any) => ({
     contribuyente_id: c.id,
-    codigo_cliente: c.codigo_cliente,
-    nombre_cliente: c.nombre,
+    codigo_cliente: c.numero_cliente,
+    nombre_cliente: c.razon_social,
     periodo_anio: anio,
     periodo_mes: mes,
     estado: 'en_proceso',
-    tipo: 'automatica',
+    tipo_ejecucion: 'automatica',
   }));
 
   const { data: insertados, error: errorInsert } = await supabase
