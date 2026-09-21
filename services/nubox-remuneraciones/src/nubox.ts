@@ -19,26 +19,57 @@ export async function crearSesionNubox(
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
 
-  await page.goto('https://web.nubox.com/Login');
-  await page.getByRole('textbox', { name: 'Ingresa tu rut' }).fill(rut);
-  await page
-    .getByRole('textbox', { name: 'Ingresa tu contraseña' })
-    .fill(password);
-  await page.getByRole('button', { name: 'Ingresar' }).click();
+  const MAX_INTENTOS = 3;
+  let ultimoError: unknown = null;
 
-  try {
-    await page
-      .getByRole('button', { name: 'Acceder de todas formas' })
-      .waitFor({ timeout: 5000 });
-    await page.getByRole('button', { name: 'Acceder de todas formas' }).click();
-  } catch {
-    // Modal no apareció
+  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+    try {
+      console.log(`[nubox] Intento de login ${intento}/${MAX_INTENTOS}`);
+
+      await page.goto('https://web.nubox.com/Login', {
+        timeout: 45000,
+        waitUntil: 'domcontentloaded',
+      });
+      await page.getByRole('textbox', { name: 'Ingresa tu rut' }).fill(rut);
+      await page
+        .getByRole('textbox', { name: 'Ingresa tu contraseña' })
+        .fill(password);
+      await page.getByRole('button', { name: 'Ingresar' }).click();
+
+      try {
+        await page
+          .getByRole('button', { name: 'Acceder de todas formas' })
+          .waitFor({ timeout: 5000 });
+        await page
+          .getByRole('button', { name: 'Acceder de todas formas' })
+          .click();
+      } catch {
+        // Modal no apareció
+      }
+
+      // Esperar que cargue el dashboard
+      await page.getByText('Remuneraciones 2').waitFor({ timeout: 15000 });
+
+      console.log('[nubox] Sesión iniciada correctamente');
+      return { browser, page };
+    } catch (err) {
+      ultimoError = err;
+      console.error(
+        `[nubox] Fallo intento ${intento}/${MAX_INTENTOS}:`,
+        err instanceof Error ? err.message : err
+      );
+      if (intento < MAX_INTENTOS) {
+        await page.waitForTimeout(5000);
+      }
+    }
   }
 
-  // Esperar que cargue el dashboard
-  await page.getByText('Remuneraciones 2').waitFor({ timeout: 15000 });
-
-  return { browser, page };
+  await browser.close();
+  throw new Error(
+    `No se pudo iniciar sesión en Nubox tras ${MAX_INTENTOS} intentos: ${
+      ultimoError instanceof Error ? ultimoError.message : String(ultimoError)
+    }`
+  );
 }
 
 export async function navegarAFormulario(

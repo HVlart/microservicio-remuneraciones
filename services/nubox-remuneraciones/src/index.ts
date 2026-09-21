@@ -84,7 +84,36 @@ async function procesarRegistros(
   console.log(`[index] Iniciando procesamiento de ${registros.length} registro/s`);
 
   // Login único al inicio para evitar que Nubox bloquee tras varios logins.
-  const { browser, page } = await crearSesionNubox(NUBOX_RUT, NUBOX_PASSWORD);
+  let sesion: Awaited<ReturnType<typeof crearSesionNubox>>;
+  try {
+    sesion = await crearSesionNubox(NUBOX_RUT, NUBOX_PASSWORD);
+  } catch (err) {
+    const mensaje = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[index] No se pudo crear la sesión de Nubox, marcando ${registros.length} registro/s como error: ${mensaje}`
+    );
+
+    // Marcar TODOS los registros como error para que no queden huérfanos en 'en_proceso'.
+    for (const registro of registros) {
+      resumen.procesados += 1;
+      resumen.errores += 1;
+      try {
+        await actualizarEstadoExtraccion(registro.id, 'error', {
+          mensajeError: `Fallo de sesión Nubox: ${mensaje}`,
+        });
+      } catch (errActualizar) {
+        console.error(
+          `[index] No se pudo marcar como error id=${registro.id}:`,
+          errActualizar
+        );
+      }
+    }
+
+    console.log('[index] Procesamiento finalizado (falló la sesión):', resumen);
+    return resumen;
+  }
+
+  const { browser, page } = sesion;
 
   try {
     let primerRegistro = true;
