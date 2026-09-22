@@ -225,6 +225,24 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Disparo manual de la MISMA extracción que corre el cron del día 15,
+// para poder probarla sin esperar al próximo mes.
+app.post('/ejecutar-automatico', autenticar, (_req: Request, res: Response) => {
+  // Responder inmediatamente sin esperar el procesamiento
+  res.json({ ok: true, mensaje: 'Extracción automática disparada manualmente' });
+
+  console.log('[manual-trigger] Iniciando extracción automática on-demand');
+
+  // Procesar en background sin await
+  ejecutarExtraccionAutomatica()
+    .then(() => {
+      console.log('[manual-trigger] Extracción automática finalizada');
+    })
+    .catch((err) => {
+      console.error('[manual-trigger] Error en la extracción automática:', err);
+    });
+});
+
 // Cron job: día 15 de cada mes a las 03:00 (hora de Santiago)
 cron.schedule(
   '0 3 15 * *',
