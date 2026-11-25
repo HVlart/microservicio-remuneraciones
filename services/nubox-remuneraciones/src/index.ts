@@ -263,6 +263,8 @@ async function ejecutarExtraccionAutomatica(): Promise<void> {
   const { data: contribuyentes, error } = await supabase
     .from('contribuyentes')
     .select('id, numero_cliente, razon_social, servicios')
+    // Los provisionales y descartados no participan en procesos (creacion de empresas).
+    .eq('estado_cliente', 'oficial')
     .contains('servicios', ['remuneraciones']);
 
   if (error) {
