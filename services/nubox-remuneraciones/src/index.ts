@@ -11,6 +11,7 @@ import {
   RegistroExtraccion,
   ResumenExtraccion,
 } from './procesar';
+import { contribuyentesParaCron } from './cron';
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -180,18 +181,8 @@ if (!CRON_AUTOMATICO_HABILITADO) {
 );
 
 async function ejecutarExtraccionAutomatica(): Promise<void> {
-  // 1. Consultar contribuyentes con 'remuneraciones' en servicios.
-  // Se asume que la columna "servicios" es un arreglo (text[]/jsonb).
-  const { data: contribuyentes, error } = await supabase
-    .from('contribuyentes')
-    .select('id, numero_cliente, razon_social, servicios')
-    // Los provisionales y descartados no participan en procesos (creacion de empresas).
-    .eq('estado_cliente', 'oficial')
-    .contains('servicios', ['remuneraciones']);
-
-  if (error) {
-    throw new Error(`Error consultando contribuyentes: ${error.message}`);
-  }
+  // 1. Oficiales, activas, con remuneraciones, sin las de prueba, por numero_cliente.
+  const contribuyentes = await contribuyentesParaCron(supabase);
 
   if (!contribuyentes || contribuyentes.length === 0) {
     console.log('[cron] No hay contribuyentes con servicio de remuneraciones');
@@ -213,7 +204,7 @@ async function ejecutarExtraccionAutomatica(): Promise<void> {
   }
 
   // 3. Insertar registros en extracciones_log con estado 'en_proceso' y tipo 'automatica'
-  const filas = contribuyentes.map((c: any) => ({
+  const filas = contribuyentes.map((c) => ({
     contribuyente_id: c.id,
     codigo_cliente: c.numero_cliente,
     nombre_cliente: c.razon_social,
