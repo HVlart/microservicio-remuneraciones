@@ -25,6 +25,20 @@ interface ResumenExtraccion {
 const NUBOX_RUT = process.env.NUBOX_RUT;
 const NUBOX_PASSWORD = process.env.NUBOX_PASSWORD;
 
+// CONTENCIÓN incidente 26-11-2026 (libros con el contenido de otra empresa):
+// procesarRegistros() solo elige la empresa en Nubox para el primer registro del
+// lote. Hasta verificar el arreglo, el cron del día 15 queda apagado y se rechaza
+// todo lote con más de una empresa. Ambos se reactivan SOLO con la variable en '1'.
+const CRON_AUTOMATICO_HABILITADO = process.env.CRON_AUTOMATICO_HABILITADO === '1';
+const PERMITIR_LOTE_MULTIEMPRESA = process.env.PERMITIR_LOTE_MULTIEMPRESA === '1';
+
+function cantidadEmpresas(registros: { codigo_cliente: string }[]): number {
+  return new Set(registros.map((r) => String(r.codigo_cliente ?? '').trim())).size;
+}
+
+const MENSAJE_LOTE_BLOQUEADO =
+  'Lote con más de una empresa bloqueado temporalmente (incidente libros 26-11-2026). Extraer una empresa por lote.';
+
 function esperar(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -82,6 +96,23 @@ async function procesarRegistros(
   };
 
   console.log(`[index] Iniciando procesamiento de ${registros.length} registro/s`);
+
+  // Última barrera de la contención: nunca procesar un lote multiempresa.
+  if (!PERMITIR_LOTE_MULTIEMPRESA && cantidadEmpresas(registros) > 1) {
+    console.error(`[index] ${MENSAJE_LOTE_BLOQUEADO} (${registros.length} registro/s)`);
+    for (const registro of registros) {
+      resumen.procesados += 1;
+      resumen.errores += 1;
+      try {
+        await actualizarEstadoExtraccion(registro.id, 'error', {
+          mensajeError: MENSAJE_LOTE_BLOQUEADO,
+        });
+      } catch (errActualizar) {
+        console.error(`[index] No se pudo marcar como error id=${registro.id}:`, errActualizar);
+      }
+    }
+    return resumen;
+  }
 
   // Login único al inicio para evitar que Nubox bloquee tras varios logins.
   let sesion: Awaited<ReturnType<typeof crearSesionNubox>>;
@@ -212,6 +243,12 @@ app.post('/extraer', autenticar, (req: Request, res: Response) => {
     return;
   }
 
+  if (!PERMITIR_LOTE_MULTIEMPRESA && cantidadEmpresas(registros) > 1) {
+    // gestion-contable (enviarLote) marca las filas en error al recibir un no-2xx.
+    res.status(409).json({ error: MENSAJE_LOTE_BLOQUEADO });
+    return;
+  }
+
   // Responder inmediatamente sin esperar el procesamiento
   res.json({ ok: true, total: registros.length, mensaje: 'Extracción iniciada en background' });
 
@@ -222,12 +259,25 @@ app.post('/extraer', autenticar, (req: Request, res: Response) => {
 });
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    commit: (process.env.RAILWAY_GIT_COMMIT_SHA ?? '').slice(0, 7) || null,
+    contencion: {
+      cronAutomatico: CRON_AUTOMATICO_HABILITADO,
+      loteMultiempresa: PERMITIR_LOTE_MULTIEMPRESA,
+    },
+  });
 });
 
 // Disparo manual de la MISMA extracción que corre el cron del día 15,
 // para poder probarla sin esperar al próximo mes.
 app.post('/ejecutar-automatico', autenticar, (_req: Request, res: Response) => {
+  if (!CRON_AUTOMATICO_HABILITADO) {
+    res.status(409).json({ error: 'Extracción automática desactivada (incidente libros 26-11-2026)' });
+    return;
+  }
+
   // Responder inmediatamente sin esperar el procesamiento
   res.json({ ok: true, mensaje: 'Extracción automática disparada manualmente' });
 
@@ -243,8 +293,11 @@ app.post('/ejecutar-automatico', autenticar, (_req: Request, res: Response) => {
     });
 });
 
-// Cron job: día 15 de cada mes a las 03:00 (hora de Santiago)
-cron.schedule(
+// Cron job: día 15 de cada mes a las 03:00 (hora de Santiago).
+// Apagado salvo CRON_AUTOMATICO_HABILITADO=1 (contención 26-11-2026).
+if (!CRON_AUTOMATICO_HABILITADO) {
+  console.log('[cron] Extracción automática del día 15 DESACTIVADA (CRON_AUTOMATICO_HABILITADO != 1)');
+} else cron.schedule(
   '0 3 15 * *',
   async () => {
     console.log('[cron] Iniciando extracción automática mensual');
@@ -273,6 +326,11 @@ async function ejecutarExtraccionAutomatica(): Promise<void> {
 
   if (!contribuyentes || contribuyentes.length === 0) {
     console.log('[cron] No hay contribuyentes con servicio de remuneraciones');
+    return;
+  }
+
+  if (!PERMITIR_LOTE_MULTIEMPRESA && contribuyentes.length > 1) {
+    console.error(`[cron] ${MENSAJE_LOTE_BLOQUEADO} No se insertan registros.`);
     return;
   }
 
