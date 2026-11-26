@@ -1,26 +1,18 @@
 import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import cron from 'node-cron';
-import { crearSesionNubox, navegarAFormulario, cambiarMes, descargarArchivo } from './nubox';
+import { crearSesionNubox } from './nubox';
 import { subirArchivoDrive } from './drive';
 import { supabase, actualizarEstadoExtraccion } from './supabase';
+import {
+  procesarRegistros as procesar,
+  cantidadEmpresas,
+  MENSAJE_LOTE_BLOQUEADO,
+  RegistroExtraccion,
+  ResumenExtraccion,
+} from './procesar';
 
 const PORT = Number(process.env.PORT) || 3001;
-
-interface RegistroExtraccion {
-  id: string;
-  contribuyente_id: string;
-  codigo_cliente: string;
-  nombre_cliente: string;
-  periodo_anio: number;
-  periodo_mes: number;
-}
-
-interface ResumenExtraccion {
-  procesados: number;
-  exitosos: number;
-  errores: number;
-}
 
 const NUBOX_RUT = process.env.NUBOX_RUT;
 const NUBOX_PASSWORD = process.env.NUBOX_PASSWORD;
@@ -31,13 +23,6 @@ const NUBOX_PASSWORD = process.env.NUBOX_PASSWORD;
 // todo lote con más de una empresa. Ambos se reactivan SOLO con la variable en '1'.
 const CRON_AUTOMATICO_HABILITADO = process.env.CRON_AUTOMATICO_HABILITADO === '1';
 const PERMITIR_LOTE_MULTIEMPRESA = process.env.PERMITIR_LOTE_MULTIEMPRESA === '1';
-
-function cantidadEmpresas(registros: { codigo_cliente: string }[]): number {
-  return new Set(registros.map((r) => String(r.codigo_cliente ?? '').trim())).size;
-}
-
-const MENSAJE_LOTE_BLOQUEADO =
-  'Lote con más de una empresa bloqueado temporalmente (incidente libros 26-11-2026). Extraer una empresa por lote.';
 
 function esperar(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -88,135 +73,18 @@ async function procesarRegistros(
       'Faltan variables de entorno NUBOX_RUT y/o NUBOX_PASSWORD'
     );
   }
+  const rut = NUBOX_RUT;
+  const password = NUBOX_PASSWORD;
 
-  const resumen: ResumenExtraccion = {
-    procesados: 0,
-    exitosos: 0,
-    errores: 0,
-  };
-
-  console.log(`[index] Iniciando procesamiento de ${registros.length} registro/s`);
-
-  // Última barrera de la contención: nunca procesar un lote multiempresa.
-  if (!PERMITIR_LOTE_MULTIEMPRESA && cantidadEmpresas(registros) > 1) {
-    console.error(`[index] ${MENSAJE_LOTE_BLOQUEADO} (${registros.length} registro/s)`);
-    for (const registro of registros) {
-      resumen.procesados += 1;
-      resumen.errores += 1;
-      try {
-        await actualizarEstadoExtraccion(registro.id, 'error', {
-          mensajeError: MENSAJE_LOTE_BLOQUEADO,
-        });
-      } catch (errActualizar) {
-        console.error(`[index] No se pudo marcar como error id=${registro.id}:`, errActualizar);
-      }
-    }
-    return resumen;
-  }
-
-  // Login único al inicio para evitar que Nubox bloquee tras varios logins.
-  let sesion: Awaited<ReturnType<typeof crearSesionNubox>>;
-  try {
-    sesion = await crearSesionNubox(NUBOX_RUT, NUBOX_PASSWORD);
-  } catch (err) {
-    const mensaje = err instanceof Error ? err.message : String(err);
-    console.error(
-      `[index] No se pudo crear la sesión de Nubox, marcando ${registros.length} registro/s como error: ${mensaje}`
-    );
-
-    // Marcar TODOS los registros como error para que no queden huérfanos en 'en_proceso'.
-    for (const registro of registros) {
-      resumen.procesados += 1;
-      resumen.errores += 1;
-      try {
-        await actualizarEstadoExtraccion(registro.id, 'error', {
-          mensajeError: `Fallo de sesión Nubox: ${mensaje}`,
-        });
-      } catch (errActualizar) {
-        console.error(
-          `[index] No se pudo marcar como error id=${registro.id}:`,
-          errActualizar
-        );
-      }
-    }
-
-    console.log('[index] Procesamiento finalizado (falló la sesión):', resumen);
-    return resumen;
-  }
-
-  const { browser, page } = sesion;
-
-  try {
-    let primerRegistro = true;
-
-    for (const registro of registros) {
-      resumen.procesados += 1;
-      const etiqueta = `id=${registro.id} (${registro.codigo_cliente} ${registro.periodo_anio}-${registro.periodo_mes})`;
-
-      console.log(
-        `[index] [${resumen.procesados}/${registros.length}] Procesando ${etiqueta}`
-      );
-
-      try {
-        console.log(`[index] Paso 1/3: descargando libro de Nubox`);
-
-        if (primerRegistro) {
-          await navegarAFormulario(
-            page,
-            registro.codigo_cliente,
-            registro.periodo_anio,
-            registro.periodo_mes
-          );
-          primerRegistro = false;
-        } else {
-          await cambiarMes(page, registro.periodo_anio, registro.periodo_mes);
-        }
-
-        const buffer = await descargarArchivo(page);
-        console.log(`[index] Descarga OK (${buffer.length} bytes)`);
-
-        const mesFormateado = String(registro.periodo_mes).padStart(2, '0');
-        const nombreArchivo = `${registro.codigo_cliente}_Libro_Remuneraciones_${registro.periodo_anio}_${mesFormateado}.xlsx`;
-
-        console.log(`[index] Paso 2/3: subiendo a Drive '${nombreArchivo}'`);
-        await subirArchivoDrive(
-          nombreArchivo,
-          buffer,
-          registro.codigo_cliente,
-          registro.periodo_anio,
-          registro.periodo_mes
-        );
-        console.log(`[index] Subida a Drive OK`);
-
-        console.log(`[index] Paso 3/3: actualizando estado en Supabase`);
-        await marcarExitoso(registro.id, nombreArchivo);
-        resumen.exitosos += 1;
-        console.log(`[index] Registro completado con éxito`);
-      } catch (err) {
-        resumen.errores += 1;
-        const mensaje = err instanceof Error ? err.message : String(err);
-        console.error(`[index] Error procesando id=${registro.id}: ${mensaje}`);
-        try {
-          await actualizarEstadoExtraccion(registro.id, 'error', {
-            mensajeError: mensaje,
-          });
-        } catch (errActualizar) {
-          console.error(
-            `[index] No se pudo actualizar estado a error:`,
-            errActualizar
-          );
-        }
-      }
-
-      await esperar(2000);
-    }
-  } finally {
-    await browser.close();
-    console.log('[index] Browser cerrado');
-  }
-
-  console.log('[index] Procesamiento finalizado:', resumen);
-  return resumen;
+  return procesar(registros, {
+    crearSesion: () => crearSesionNubox(rut, password),
+    subirArchivoDrive,
+    marcarExitoso,
+    marcarError: (id, mensaje) =>
+      actualizarEstadoExtraccion(id, 'error', { mensajeError: mensaje }),
+    esperar,
+    permitirMultiempresa: PERMITIR_LOTE_MULTIEMPRESA,
+  });
 }
 
 const app = express();
