@@ -39,9 +39,9 @@ function escaparNombre(nombre: string): string {
 
 export async function buscarOCrearCarpeta(
   nombre: string,
-  padreId: string
+  padreId: string,
+  drive: drive_v3.Drive = getDriveClient()
 ): Promise<string> {
-  const drive = getDriveClient();
   const nombreEscapado = escaparNombre(nombre);
 
   const respuesta = await drive.files.list({
@@ -79,15 +79,22 @@ export async function buscarOCrearCarpeta(
   return creada.data.id;
 }
 
+/**
+ * Sube el libro a <raíz>/<código>/<año>/. Si ya hay un archivo con ese nombre,
+ * NO se reemplaza su contenido con files.update: la versión anterior quedaría
+ * en el historial de versiones (incidente 26-11-2026). Se crea un archivo nuevo
+ * y los anteriores van a la papelera (la cuenta de servicio es «gestor de
+ * contenido»: no puede borrar definitivamente; la papelera la vacía un
+ * administrador). Todas las búsquedas excluyen la papelera.
+ */
 export async function subirArchivoDrive(
   nombreArchivo: string,
   buffer: Buffer,
   codigoCliente: string,
   anio: number,
-  mes: number
+  mes: number,
+  drive: drive_v3.Drive = getDriveClient()
 ): Promise<string> {
-  const drive = getDriveClient();
-
   const carpetaRaizId = process.env.DRIVE_FOLDER_ID;
   if (!carpetaRaizId) {
     throw new Error('Falta la variable de entorno DRIVE_FOLDER_ID');
@@ -99,11 +106,13 @@ export async function subirArchivoDrive(
 
   const carpetaClienteId = await buscarOCrearCarpeta(
     codigoCliente,
-    carpetaRaizId
+    carpetaRaizId,
+    drive
   );
   const carpetaAnioId = await buscarOCrearCarpeta(
     String(anio),
-    carpetaClienteId
+    carpetaClienteId,
+    drive
   );
 
   const busqueda = await drive.files.list({
@@ -113,57 +122,10 @@ export async function subirArchivoDrive(
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
   });
+  const anteriores = (busqueda.data.files ?? [])
+    .map((f) => f.id)
+    .filter((id): id is string => Boolean(id));
 
-  const archivosExistentes = busqueda.data.files ?? [];
-
-  // Si ya existe el archivo, actualizamos su contenido EN SU LUGAR
-  // (mismo fileId). Esto evita duplicados y mantiene estable el enlace.
-  if (archivosExistentes.length > 0 && archivosExistentes[0].id) {
-    const fileId = archivosExistentes[0].id;
-    console.log(
-      `[drive] Archivo '${nombreArchivo}' ya existe (id=${fileId}). Reemplazando contenido en su lugar...`
-    );
-
-    // Si por alguna razón hubiera más de una copia, eliminamos las sobrantes.
-    for (const sobrante of archivosExistentes.slice(1)) {
-      if (!sobrante.id) continue;
-      try {
-        await drive.files.delete({
-          fileId: sobrante.id,
-          supportsAllDrives: true,
-        });
-        console.log(`[drive] Copia duplicada eliminada (id=${sobrante.id})`);
-      } catch (err) {
-        console.error(
-          `[drive] No se pudo eliminar copia duplicada (id=${sobrante.id}):`,
-          err
-        );
-      }
-    }
-
-    const actualizado = await drive.files.update({
-      fileId,
-      media: {
-        mimeType: MIME_XLSX,
-        body: Readable.from(buffer),
-      },
-      fields: 'id',
-      supportsAllDrives: true,
-    });
-
-    if (!actualizado.data.id) {
-      throw new Error(
-        `No se pudo actualizar el archivo existente '${nombreArchivo}'`
-      );
-    }
-
-    console.log(
-      `[drive] OK: '${nombreArchivo}' actualizado (id=${actualizado.data.id})`
-    );
-    return actualizado.data.id;
-  }
-
-  console.log(`[drive] Archivo '${nombreArchivo}' no existe. Creando nuevo...`);
   const subido = await drive.files.create({
     requestBody: {
       name: nombreArchivo,
@@ -180,7 +142,33 @@ export async function subirArchivoDrive(
   if (!subido.data.id) {
     throw new Error(`No se pudo subir el archivo '${nombreArchivo}'`);
   }
-
   console.log(`[drive] OK: '${nombreArchivo}' creado (id=${subido.data.id})`);
+
+  // Recién con el nuevo arriba, los anteriores van a la papelera (solo metadatos:
+  // trashed = true; su contenido no se toca).
+  const fallidos: string[] = [];
+  for (const id of anteriores) {
+    try {
+      await drive.files.update({
+        fileId: id,
+        requestBody: { trashed: true },
+        fields: 'id',
+        supportsAllDrives: true,
+      });
+      console.log(`[drive] Versión anterior a la papelera (id=${id})`);
+    } catch (err) {
+      console.error(
+        `[drive] No se pudo mandar a la papelera (id=${id}):`,
+        err instanceof Error ? err.message : err
+      );
+      fallidos.push(id);
+    }
+  }
+  if (fallidos.length > 0) {
+    throw new Error(
+      `Se subió '${nombreArchivo}' (id=${subido.data.id}) pero no se pudo mandar a la papelera la versión anterior (${fallidos.join(', ')}): quedan dos archivos con el mismo nombre`
+    );
+  }
+
   return subido.data.id;
 }
