@@ -72,33 +72,34 @@ export async function crearSesionNubox(
   );
 }
 
-export async function navegarAFormulario(
-  page: Page,
-  codigoCliente: string,
-  anio: number,
-  mes: number
-): Promise<void> {
-  // Navegar al módulo
+/**
+ * Abre «Remuneraciones 2 > Reportes > Gestión > Costo Empresa». Va UNA vez por
+ * sesión: desde el formulario del reporte el menú ya no está disponible
+ * (16-06-2026: los reintentos de navegar en cada registro fallaron por timeout).
+ */
+export async function abrirReporteCostoEmpresa(page: Page): Promise<void> {
   await page.getByText('Remuneraciones 2').click();
   await page.getByRole('button', { name: 'Reportes' }).click();
   await page.getByRole('button', { name: 'Gestión' }).click();
   await page.getByRole('button', { name: 'Costo Empresa' }).click();
+}
 
-  // Seleccionar empresa
+/**
+ * Elige la empresa en el formulario ya abierto. Va en CADA registro: el
+ * formulario conserva la empresa anterior y, sin esto, el reporte sale de la
+ * primera empresa del lote (incidente 26-11-2026).
+ */
+export async function seleccionarEmpresa(
+  page: Page,
+  codigoCliente: string
+): Promise<void> {
   await page.locator('.ui-absolute.ui-right-1').click();
   await page
     .getByRole('option', { name: new RegExp(`^${codigoCliente}`) })
     .click();
-
-  // Seleccionar año y mes
-  await page.getByRole('button', { name: 'Abrir selector de mes' }).click();
-  await page.getByLabel('Seleccionar año').selectOption(String(anio));
-  await page
-    .getByRole('button', { name: `${MESES_NOMBRES[mes - 1]} ${anio}` })
-    .click();
 }
 
-export async function cambiarMes(
+export async function seleccionarPeriodo(
   page: Page,
   anio: number,
   mes: number

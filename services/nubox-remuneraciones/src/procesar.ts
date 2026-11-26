@@ -1,5 +1,11 @@
 import type { Page } from 'playwright';
-import { navegarAFormulario, cambiarMes, descargarArchivo } from './nubox';
+import {
+  abrirReporteCostoEmpresa,
+  seleccionarEmpresa,
+  seleccionarPeriodo,
+  descargarArchivo,
+} from './nubox';
+import { verificarReporte, EmpresaEsperada } from './verificacion';
 
 export interface RegistroExtraccion {
   id: string;
@@ -32,6 +38,8 @@ export interface Dependencias {
   marcarExitoso: (id: string, nombreArchivo: string) => Promise<void>;
   marcarError: (id: string, mensaje: string) => Promise<void>;
   esperar: (ms: number) => Promise<void>;
+  /** Empresa que DEBE venir en el reporte (de contribuyentes); null si no existe. */
+  obtenerEmpresa: (registro: RegistroExtraccion) => Promise<EmpresaEsperada | null>;
   /** Contención 26-11-2026: false rechaza lotes con más de una empresa. */
   permitirMultiempresa: boolean;
 }
@@ -101,7 +109,7 @@ export async function procesarRegistros(
   const { browser, page } = sesion;
 
   try {
-    let primerRegistro = true;
+    let formularioAbierto = false;
 
     for (const registro of registros) {
       resumen.procesados += 1;
@@ -112,22 +120,30 @@ export async function procesarRegistros(
       );
 
       try {
+        const esperada = await deps.obtenerEmpresa(registro);
+        if (!esperada) {
+          throw new Error(
+            `No se encontró el contribuyente de ${registro.codigo_cliente}: no se puede verificar el reporte. No se descargó ni se subió.`
+          );
+        }
+
         console.log(`[index] Paso 1/3: descargando libro de Nubox`);
 
-        if (primerRegistro) {
-          await navegarAFormulario(
-            page,
-            registro.codigo_cliente,
-            registro.periodo_anio,
-            registro.periodo_mes
-          );
-          primerRegistro = false;
-        } else {
-          await cambiarMes(page, registro.periodo_anio, registro.periodo_mes);
+        if (!formularioAbierto) {
+          await abrirReporteCostoEmpresa(page);
+          formularioAbierto = true;
         }
+        // La empresa se elige en CADA registro (incidente 26-11-2026).
+        await seleccionarEmpresa(page, registro.codigo_cliente);
+        await seleccionarPeriodo(page, registro.periodo_anio, registro.periodo_mes);
 
         const buffer = await descargarArchivo(page);
         console.log(`[index] Descarga OK (${buffer.length} bytes)`);
+
+        // Obligatoria: si el encabezado no es de la empresa esperada o el reporte
+        // no es del tipo esperado, lanza y el registro queda en error sin subir.
+        verificarReporte(buffer, esperada);
+        console.log(`[index] Verificación OK: tipo de reporte y empresa ${esperada.codigo}`);
 
         const mesFormateado = String(registro.periodo_mes).padStart(2, '0');
         const nombreArchivo = `${registro.codigo_cliente}_Libro_Remuneraciones_${registro.periodo_anio}_${mesFormateado}.xlsx`;

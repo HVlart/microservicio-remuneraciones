@@ -76,3 +76,35 @@ export async function actualizarEstadoExtraccion(
     `[supabase] OK: extracciones_log id=${id} actualizado a estado='${estado}' (${data.length} fila/s)`
   );
 }
+
+/**
+ * Empresa que debe venir en el reporte de Nubox, según contribuyentes. Se busca
+ * por contribuyente_id y se exige que su numero_cliente sea el código del
+ * registro: si no calzan, no se puede saber cuál es la correcta.
+ */
+export async function obtenerEmpresaEsperada(
+  contribuyenteId: string,
+  codigoCliente: string
+): Promise<{ codigo: string; razonSocial: string; rut: string; dv: string } | null> {
+  const { data, error } = await supabase
+    .from('contribuyentes')
+    .select('numero_cliente, razon_social, rut, dv')
+    .eq('id', contribuyenteId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Error consultando contribuyentes (id=${contribuyenteId}): ${error.message}`);
+  }
+  if (!data || !data.rut || !data.dv) return null;
+  if (String(data.numero_cliente).trim() !== String(codigoCliente).trim()) {
+    throw new Error(
+      `El contribuyente ${contribuyenteId} tiene código ${data.numero_cliente}, no ${codigoCliente}: no se puede verificar el reporte`
+    );
+  }
+  return {
+    codigo: String(data.numero_cliente),
+    razonSocial: String(data.razon_social ?? ''),
+    rut: String(data.rut),
+    dv: String(data.dv),
+  };
+}

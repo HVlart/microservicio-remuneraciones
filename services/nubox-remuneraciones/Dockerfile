@@ -31,6 +31,8 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 WORKDIR /app
 
 COPY package*.json ./
+# xlsx se instala desde el tarball vendorizado (package.json: file:vendor/...)
+COPY vendor ./vendor
 RUN npm install
 
 COPY . .

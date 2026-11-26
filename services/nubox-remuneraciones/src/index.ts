@@ -3,7 +3,7 @@ import express, { Request, Response } from 'express';
 import cron from 'node-cron';
 import { crearSesionNubox } from './nubox';
 import { subirArchivoDrive } from './drive';
-import { supabase, actualizarEstadoExtraccion } from './supabase';
+import { supabase, actualizarEstadoExtraccion, obtenerEmpresaEsperada } from './supabase';
 import {
   procesarRegistros as procesar,
   cantidadEmpresas,
@@ -83,6 +83,7 @@ async function procesarRegistros(
     marcarError: (id, mensaje) =>
       actualizarEstadoExtraccion(id, 'error', { mensajeError: mensaje }),
     esperar,
+    obtenerEmpresa: (r) => obtenerEmpresaEsperada(r.contribuyente_id, r.codigo_cliente),
     permitirMultiempresa: PERMITIR_LOTE_MULTIEMPRESA,
   });
 }
