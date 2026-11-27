@@ -41,6 +41,8 @@ async function marcarExitoso(id: string, nombreArchivo: string): Promise<void> {
     .update({
       estado: 'exitoso',
       nombre_archivo: nombreArchivo,
+      // Un registro reintentado al final del lote ya tenia el error del primer intento.
+      mensaje_error: null,
     })
     .eq('id', id)
     .select('id');

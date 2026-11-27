@@ -32,7 +32,21 @@ export interface OpcionesNuboxFalso {
   ignorarCambioDeEmpresa?: boolean;
   /** Nombre de la hoja del reporte descargado (tipo de reporte). */
   nombreHoja?: string;
+  /**
+   * Timeouts al generar el reporte: por código de empresa, cuántas veces falla
+   * (Infinity = siempre). Tras el timeout la página queda colgada: todo clic
+   * falla por timeout hasta volver al inicio (goto) o abrir otra sesión.
+   */
+  timeoutsAlGenerar?: Record<string, number>;
+  /** Cuántas veces el botón «Costo Empresa» da timeout (y la página queda colgada). */
+  timeoutsCostoEmpresa?: number;
+  /** El goto de vuelta al inicio falla (obliga a abrir una sesión nueva). */
+  gotoFalla?: boolean;
+  /** El reporte de esta empresa trae siempre el encabezado de otra (código -> código). */
+  contenidoDe?: Record<string, string>;
 }
+
+export const URL_INICIO_FALSA = 'https://web.nubox.falso/inicio';
 
 export function crearXlsxCostoEmpresa(
   empresa: EmpresaFalsa,
@@ -68,11 +82,40 @@ export class NuboxFalso {
   /** Códigos elegidos en el desplegable de empresa, en orden. */
   readonly seleccionesEmpresa: string[] = [];
   readonly descargas: Array<{ empresa: string; anio: number; mes: number }> = [];
+  /** Intentos de «Generar reporte» por empresa (incluidos los que fallaron). */
+  readonly intentosGenerar: Record<string, number> = {};
+  colgada = false;
+  sesiones = 0;
+  private fallosCostoEmpresa = 0;
+  readonly gotos: string[] = [];
 
   constructor(private readonly opciones: OpcionesNuboxFalso) {}
 
+  /** Login nuevo: el estado de la página vuelve a cero. */
+  iniciarSesion(): Page {
+    this.sesiones += 1;
+    this.reiniciarPantalla();
+    return this.pagina();
+  }
+
+  private reiniciarPantalla(): void {
+    this.pantalla = 'inicio';
+    this.menu = [];
+    this.empresa = null;
+    this.periodo = null;
+    this.desplegableAbierto = false;
+    this.selectorMesAbierto = false;
+    this.colgada = false;
+    this.esperandoDescarga.splice(0);
+  }
+
+  private timeout(que: string): Error {
+    return new Error(`locator.click: Timeout 30000ms exceeded. waiting for ${que}`);
+  }
+
   private clic(rol: string, nombre: Nombre): void {
     const n = typeof nombre === 'string' ? nombre : String(nombre);
+    if (this.colgada) throw this.timeout(`${rol} '${n}'`);
 
     if (rol === 'text' && n === 'Remuneraciones 2') {
       // Observado en producción (16-06-2026): desde el formulario del reporte el
@@ -88,6 +131,11 @@ export class NuboxFalso {
       if (n === 'Reportes' && this.menu.at(-1) === 'remuneraciones') { this.menu.push('reportes'); return; }
       if (n === 'Gestión' && this.menu.at(-1) === 'reportes') { this.menu.push('gestion'); return; }
       if (n === 'Costo Empresa' && this.menu.at(-1) === 'gestion') {
+        if (this.fallosCostoEmpresa < (this.opciones.timeoutsCostoEmpresa ?? 0)) {
+          this.fallosCostoEmpresa += 1;
+          this.colgada = true;
+          throw this.timeout("getByRole('button', { name: 'Costo Empresa' })");
+        }
         this.pantalla = 'costo-empresa';
         this.empresa = null;
         this.periodo = null;
@@ -96,7 +144,17 @@ export class NuboxFalso {
       }
       if (this.pantalla !== 'costo-empresa') throw new Error(`Botón '${n}' no visible fuera del formulario`);
       if (n === 'Abrir selector de mes') { this.selectorMesAbierto = true; return; }
-      if (n === 'Generar reporte') { this.generar(); return; }
+      if (n === 'Generar reporte') {
+        const cod = this.empresa?.codigo ?? '';
+        this.intentosGenerar[cod] = (this.intentosGenerar[cod] ?? 0) + 1;
+        const fallas = this.opciones.timeoutsAlGenerar?.[cod] ?? 0;
+        if (this.intentosGenerar[cod] <= fallas) {
+          this.colgada = true;
+          throw this.timeout("getByRole('button', { name: 'Generar reporte' })");
+        }
+        this.generar();
+        return;
+      }
       const m = /^(\p{L}+) (\d{4})$/u.exec(n);
       if (m && this.selectorMesAbierto) {
         const mes = MESES.indexOf(m[1]) + 1;
@@ -129,7 +187,9 @@ export class NuboxFalso {
   private generar(): void {
     if (!this.empresa || !this.periodo) throw new Error('Faltan empresa o período');
     const { anio, mes } = this.periodo;
-    const buffer = crearXlsxCostoEmpresa(this.empresa, anio, mes, this.opciones.nombreHoja);
+    const otra = this.opciones.contenidoDe?.[this.empresa.codigo];
+    const contenido = otra ? this.opciones.empresas.find((e) => e.codigo === otra)! : this.empresa;
+    const buffer = crearXlsxCostoEmpresa(contenido, anio, mes, this.opciones.nombreHoja);
     this.descargas.push({ empresa: this.empresa.codigo, anio, mes });
     const descarga = { createReadStream: async () => Readable.from([buffer]) };
     const pendientes = this.esperandoDescarga.splice(0);
@@ -139,7 +199,12 @@ export class NuboxFalso {
   pagina(): Page {
     const localizador = (rol: string, nombre: Nombre) => ({
       click: async () => this.clic(rol, nombre),
-      waitFor: async () => undefined,
+      waitFor: async () => {
+        if (this.colgada) throw this.timeout(`${rol} '${String(nombre)}'`);
+        if (rol === 'text' && nombre === 'Remuneraciones 2' && this.pantalla !== 'inicio') {
+          throw this.timeout("getByText('Remuneraciones 2')");
+        }
+      },
       selectOption: async (valor: string) => {
         if (rol === 'label' && nombre === 'Seleccionar año' && this.selectorMesAbierto) {
           this.anio = Number(valor);
@@ -150,11 +215,20 @@ export class NuboxFalso {
     });
 
     const pagina = {
+      url: () => (this.pantalla === 'inicio' ? URL_INICIO_FALSA : 'https://web.nubox.falso/reportes/costo-empresa'),
+      goto: async (url: string) => {
+        this.gotos.push(url);
+        if (this.opciones.gotoFalla) throw new Error(`page.goto: Timeout 45000ms exceeded. navigating to "${url}"`);
+        if (url !== URL_INICIO_FALSA) throw new Error(`NuboxFalso: goto a URL desconocida ${url}`);
+        this.reiniciarPantalla();
+        return null;
+      },
       getByText: (texto: string) => localizador('text', texto),
       getByRole: (rol: string, op?: { name?: string | RegExp }) => localizador(rol, op?.name),
       getByLabel: (etiqueta: string) => localizador('label', etiqueta),
       locator: (selector: string) => ({
         click: async () => {
+          if (this.colgada) throw this.timeout(selector);
           if (selector === '.ui-absolute.ui-right-1' && this.pantalla === 'costo-empresa') {
             this.desplegableAbierto = true;
             return;

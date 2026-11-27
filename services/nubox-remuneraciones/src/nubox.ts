@@ -85,6 +85,18 @@ export async function abrirReporteCostoEmpresa(page: Page): Promise<void> {
 }
 
 /**
+ * Recupera el formulario tras un fallo (timeout u otro error de Nubox): desde el
+ * formulario el menú no está, así que vuelve a la página de inicio de la sesión
+ * (la URL a la que llegó el login), espera el menú y abre el reporte de nuevo.
+ * Si esto falla, quien llama cierra la sesión y abre otra.
+ */
+export async function volverAlFormulario(page: Page, urlInicio: string): Promise<void> {
+  await page.goto(urlInicio, { timeout: 45000, waitUntil: 'domcontentloaded' });
+  await page.getByText('Remuneraciones 2').waitFor({ timeout: 15000 });
+  await abrirReporteCostoEmpresa(page);
+}
+
+/**
  * Elige la empresa en el formulario ya abierto. Va en CADA registro: el
  * formulario conserva la empresa anterior y, sin esto, el reporte sale de la
  * primera empresa del lote (incidente 26-11-2026).
