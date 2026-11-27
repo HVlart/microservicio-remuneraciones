@@ -60,6 +60,14 @@ export const MENSAJE_LOTE_BLOQUEADO =
 /** Fallos seguidos (aun recuperando Nubox entre uno y otro) que detienen el lote. */
 export const MAX_FALLOS_SEGUIDOS = 3;
 
+/**
+ * Sesiones nuevas de Nubox que un lote puede abrir para recuperarse (sin contar
+ * el login inicial): muchos logins seguidos pueden hacer que Nubox bloquee la cuenta.
+ */
+export const MAX_SESIONES_NUEVAS = 5;
+
+export const MOTIVO_TOPE_SESIONES = 'Lote detenido: se alcanzó el máximo de sesiones nuevas por lote';
+
 const MOTIVO_FALLOS_SEGUIDOS =
   `Lote detenido: ${MAX_FALLOS_SEGUIDOS} registros seguidos fallaron incluso después de recuperar Nubox.`;
 
@@ -69,6 +77,9 @@ const MOTIVO_FALLOS_SEGUIDOS =
  * fallo seguido.
  */
 class ErrorDatos extends Error {}
+
+/** La recuperación necesitaría una sesión nueva más allá de MAX_SESIONES_NUEVAS. */
+class ErrorTopeSesiones extends Error {}
 
 const textoError = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -126,6 +137,7 @@ export async function procesarRegistros(
   let formularioAbierto = false;
   let necesitaRecuperar = false;
   let fallosSeguidos = 0;
+  let sesionesNuevas = 0;
 
   const cerrarSesion = async () => {
     const actual = sesion;
@@ -156,8 +168,12 @@ export async function procesarRegistros(
         console.error(`[index] Recuperación: no se pudo reabrir el formulario: ${textoError(err)}`);
       }
     }
+    if (sesionesNuevas >= MAX_SESIONES_NUEVAS) {
+      throw new ErrorTopeSesiones(`${MOTIVO_TOPE_SESIONES} (${MAX_SESIONES_NUEVAS}).`);
+    }
     await cerrarSesion();
     formularioAbierto = false;
+    sesionesNuevas += 1;
     sesion = await deps.crearSesion();
     urlInicio = sesion.page.url();
     console.log('[index] Recuperación: sesión nueva de Nubox');
@@ -228,6 +244,7 @@ export async function procesarRegistros(
         await recuperar();
         necesitaRecuperar = false;
       } catch (err) {
+        if (err instanceof ErrorTopeSesiones) return { tipo: 'detenido', motivo: err.message };
         return {
           tipo: 'detenido',
           motivo: `Lote detenido: no se pudo recuperar Nubox (falló reabrir el formulario y también abrir una sesión nueva): ${textoError(err)}`,

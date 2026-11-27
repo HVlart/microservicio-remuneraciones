@@ -305,3 +305,78 @@ test('sin datos del contribuyente es un error definitivo: no se reintenta ni cue
     assert.equal(nubox.intentosGenerar[c], undefined);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Tope de sesiones nuevas de Nubox por lote (sin contar el login inicial)
+// ---------------------------------------------------------------------------
+
+/** RUT ficticio con dígito verificador válido. */
+function rutFicticio(cuerpo: number): string {
+  let suma = 0;
+  let factor = 2;
+  for (const d of String(cuerpo).split('').reverse()) {
+    suma += Number(d) * factor;
+    factor = factor === 7 ? 2 : factor + 1;
+  }
+  const dv = 11 - (suma % 11);
+  return `${cuerpo}-${dv === 11 ? '0' : dv === 10 ? 'K' : dv}`;
+}
+
+/** 14 empresas ficticias C-101..C-114 (3 dígitos: ningún código es prefijo de otro). */
+const MUCHAS: EmpresaFalsa[] = Array.from({ length: 14 }, (_, k) => ({
+  codigo: `C-${101 + k}`,
+  razonSocial: `ZZ PRUEBA TOPE ${101 + k} SPA`,
+  rut: rutFicticio(20000000 + k * 1111),
+}));
+const codigos = (desde: number, hasta: number) =>
+  MUCHAS.filter((e) => Number(e.codigo.slice(2)) >= desde && Number(e.codigo.slice(2)) <= hasta).map((e) => e.codigo);
+/** Fallan las impares: los fallos nunca son seguidos (no salta el corte por 3 seguidos). */
+const impares = (cods: string[], veces: number) =>
+  Object.fromEntries(cods.filter((c) => Number(c.slice(2)) % 2 === 1).map((c) => [c, veces]));
+
+test('tope de sesiones: 5 sesiones nuevas en un lote se permiten', async () => {
+  const cods = codigos(101, 110);
+  // Reabrir siempre falla: cada recuperación abre una sesión nueva. 5 fallos (101..109) -> 5 sesiones nuevas.
+  const { deps, estado, nubox } = armar(
+    { empresas: MUCHAS, gotoFalla: true, timeoutsAlGenerar: impares(cods, 1) },
+    MUCHAS
+  );
+
+  const resumen = await procesarRegistros(lote(...cods), deps);
+
+  assert.equal(resumen.detenido, false);
+  assert.equal(nubox.sesiones, 1 + 5);
+  for (const c of cods) assert.equal(estado[idDe(c)].estado, 'exitoso', c);
+});
+
+test('tope de sesiones: si se necesita una sexta sesión nueva, se detiene el lote y el resto queda en error con motivo', async () => {
+  const cods = codigos(101, 114);
+  const { deps, estado, nubox, subidas, navegadores } = armar(
+    { empresas: MUCHAS, gotoFalla: true, timeoutsAlGenerar: impares(cods, Infinity) },
+    MUCHAS
+  );
+
+  const resumen = await procesarRegistros(lote(...cods), deps);
+
+  const MOTIVO = 'Lote detenido: se alcanzó el máximo de sesiones nuevas por lote';
+  assert.equal(resumen.detenido, true);
+  assert.equal(nubox.sesiones, 1 + 5, 'abrió más de 5 sesiones nuevas');
+  // Antes del tope: las pares salieron bien (cada una con su sesión nueva).
+  for (const c of ['C-102', 'C-104', 'C-106', 'C-108', 'C-110']) assert.equal(estado[idDe(c)].estado, 'exitoso', c);
+  // C-111 falló y su recuperación necesitaba la sexta: de ahí en adelante no se procesa nada.
+  for (const c of ['C-112', 'C-113', 'C-114']) {
+    assert.equal(nubox.intentosGenerar[c], undefined, `${c} se procesó después del tope`);
+    assert.equal(estado[idDe(c)].estado, 'error');
+    assert.ok(estado[idDe(c)].mensaje!.startsWith(MOTIVO), estado[idDe(c)].mensaje);
+  }
+  // Los fallidos pendientes no se reintentan: quedan en error con el mismo motivo.
+  for (const c of ['C-101', 'C-103', 'C-105', 'C-107', 'C-109', 'C-111']) {
+    assert.equal(nubox.intentosGenerar[c], 1, `${c} se reintentó`);
+    assert.equal(estado[idDe(c)].estado, 'error');
+    assert.ok(estado[idDe(c)].mensaje!.startsWith(MOTIVO), estado[idDe(c)].mensaje);
+  }
+  assert.ok(subidas.every((s) => !s.codigo.match(/C-1(01|03|05|07|09|11|12|13|14)/)));
+  assert.deepEqual([resumen.procesados, resumen.exitosos, resumen.errores], [14, 5, 9]);
+  const n = navegadores();
+  assert.equal(n.abiertos, n.cerrados, 'quedó un navegador abierto');
+});
